@@ -6,18 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/SohamRupaye/infrawatch/apps/engine/streams"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
-)
-
-const (
-	StreamMetrics     = "infrawatch:metrics"
-	StreamStateChange = "infrawatch:state_changes"
-	StreamHealing     = "infrawatch:healing"
-	StreamAnomalies   = "infrawatch:anomalies"
-	StreamConfig      = "infrawatch:service_config_commands"
-
-	maxStreamLen = 10000 // Redis MAXLEN approximate trimming
 )
 
 // MetricEvent is published on every health check poll.
@@ -90,22 +81,22 @@ func (b *Bus) Close() error {
 
 // PublishMetric publishes a metric event to the metrics stream.
 func (b *Bus) PublishMetric(ctx context.Context, evt MetricEvent) {
-	b.publish(ctx, StreamMetrics, evt)
+	b.publish(ctx, streams.Metrics, evt)
 }
 
 // PublishStateChange publishes a state transition event.
 func (b *Bus) PublishStateChange(ctx context.Context, evt StateChangeEvent) {
-	b.publish(ctx, StreamStateChange, evt)
+	b.publish(ctx, streams.StateChange, evt)
 }
 
 // PublishHealingEvent publishes a healing outcome event.
 func (b *Bus) PublishHealingEvent(ctx context.Context, evt HealingEvent) {
-	b.publish(ctx, StreamHealing, evt)
+	b.publish(ctx, streams.Healing, evt)
 }
 
 // PublishAnomaly publishes an anomaly detection event.
 func (b *Bus) PublishAnomaly(ctx context.Context, evt AnomalyEvent) {
-	b.publish(ctx, StreamAnomalies, evt)
+	b.publish(ctx, streams.Anomalies, evt)
 }
 
 // publish serialises evt to JSON and adds it to the named Redis Stream.
@@ -118,7 +109,7 @@ func (b *Bus) publish(ctx context.Context, stream string, evt interface{}) {
 
 	args := &redis.XAddArgs{
 		Stream: stream,
-		MaxLen: maxStreamLen,
+		MaxLen: streams.MaxLen,
 		Approx: true,
 		Values: map[string]interface{}{"payload": string(data)},
 	}
