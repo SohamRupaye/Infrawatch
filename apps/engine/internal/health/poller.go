@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -175,6 +176,21 @@ func (p *Poller) poll(ctx context.Context, svc config.ServiceConfig) {
 
 	result := p.checker.Check(ctx, svc)
 
+	// If the service's own check passed, verify all declared dependencies are
+	// healthy.  A service that depends on a DEAD or UNHEALTHY upstream should
+	// be considered degraded even if it responds to its own health probe —
+	// because it cannot serve real traffic without the dependency.
+	if result.OK {
+		if reason := p.dependencyFailureReason(svc); reason != "" {
+			sugar.Debugw("dependency unhealthy, overriding check result",
+				"service", svc.Name,
+				"reason", reason,
+			)
+			result.OK = false
+			result.Error = fmt.Errorf("dependency failure: %s", reason)
+		}
+	}
+
 	// Feed result into circuit breaker
 	if result.OK {
 		breaker.RecordSuccess()
@@ -201,4 +217,21 @@ func (p *Poller) poll(ctx context.Context, svc config.ServiceConfig) {
 			"response_time_ms", result.ResponseTime.Milliseconds(),
 		)
 	}
+}
+
+// dependencyFailureReason returns a non-empty string if any declared dependency
+// of svc is currently DEAD or UNHEALTHY.  Returns "" when all dependencies are
+// healthy or not yet observed (unknown dependencies do not block the check).
+func (p *Poller) dependencyFailureReason(svc config.ServiceConfig) string {
+	for _, dep := range svc.Dependencies {
+		snap, ok := p.stateMgr.GetSnapshot(dep)
+		if !ok {
+			// Dependency not yet polled — don't penalise the dependent service.
+			continue
+		}
+		if snap.CurrentState == StateDead || snap.CurrentState == StateUnhealthy {
+			return fmt.Sprintf("%q is %s", dep, snap.CurrentState)
+		}
+	}
+	return ""
 }
