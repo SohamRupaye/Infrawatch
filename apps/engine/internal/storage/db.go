@@ -182,6 +182,22 @@ func (d *DB) SetupSchema(ctx context.Context) error {
 			`CREATE INDEX IF NOT EXISTS idx_alert_history_ack
 			 ON alert_history (acknowledged, created_at DESC)`,
 		},
+		{
+			"create config_audit table",
+			`CREATE TABLE IF NOT EXISTS config_audit (
+				id         BIGSERIAL   PRIMARY KEY,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				action     TEXT        NOT NULL,
+				service    TEXT        NOT NULL,
+				user_id    TEXT,
+				details    JSONB
+			)`,
+		},
+		{
+			"create config_audit service+created index",
+			`CREATE INDEX IF NOT EXISTS idx_config_audit_service_created
+			 ON config_audit (service, created_at DESC)`,
+		},
 	}
 
 	for _, step := range steps {
