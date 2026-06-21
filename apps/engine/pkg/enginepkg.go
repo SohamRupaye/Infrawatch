@@ -10,19 +10,23 @@ import (
 	"time"
 
 	"github.com/SohamRupaye/infrawatch/apps/engine/config"
+	"github.com/SohamRupaye/infrawatch/apps/engine/streams"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
-// ── Stream name constants (duplicated from internal/events to avoid the
-//    internal package restriction) ──────────────────────────────────────────
+// ── Stream name constants ──────────────────────────────────────────────────
+// These are re-exported from apps/engine/streams so that API code can use
+// enginepkg.Stream* without importing the streams package directly, while
+// the engine's internal bus uses the streams package as the single source
+// of truth.
 
 const (
-	StreamMetrics     = "infrawatch:metrics"
-	StreamStateChange = "infrawatch:state_changes"
-	StreamHealing     = "infrawatch:healing"
-	StreamAnomalies   = "infrawatch:anomalies"
-	StreamConfig      = "infrawatch:service_config_commands"
+	StreamMetrics     = streams.Metrics
+	StreamStateChange = streams.StateChange
+	StreamHealing     = streams.Healing
+	StreamAnomalies   = streams.Anomalies
+	StreamConfig      = streams.Config
 )
 
 // ── Event types ────────────────────────────────────────────────────────────
@@ -240,7 +244,7 @@ func (b *Bus) publish(ctx context.Context, stream string, evt interface{}) {
 	}
 	if err := b.rdb.XAdd(ctx, &redis.XAddArgs{
 		Stream: stream,
-		MaxLen: 10000,
+		MaxLen: streams.MaxLen,
 		Approx: true,
 		Values: map[string]interface{}{"payload": string(data)},
 	}).Err(); err != nil {

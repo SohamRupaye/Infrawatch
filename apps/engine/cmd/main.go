@@ -18,6 +18,7 @@ import (
 	"github.com/SohamRupaye/infrawatch/apps/engine/internal/health"
 	"github.com/SohamRupaye/infrawatch/apps/engine/internal/storage"
 	enginepkg "github.com/SohamRupaye/infrawatch/apps/engine/pkg"
+	"github.com/SohamRupaye/infrawatch/apps/engine/streams"
 	"go.uber.org/zap"
 )
 
@@ -137,7 +138,7 @@ func main() {
 	})
 
 	// Subscribe to API-initiated service config mutations.
-	go bus.Subscribe(ctx, events.StreamConfig, "$", func(_ string, payload []byte) {
+	go bus.Subscribe(ctx, streams.Config, "$", func(_ string, payload []byte) {
 		var cmd enginepkg.ServiceConfigCommand
 		if err := json.Unmarshal(payload, &cmd); err != nil {
 			sugar.Warnw("invalid service config command payload", "error", err)
