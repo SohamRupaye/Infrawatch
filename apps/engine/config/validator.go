@@ -3,8 +3,17 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 )
+
+// safeDockerName matches Docker container names: start with alphanumeric,
+// then alphanumeric, underscore, dash, or dot.
+var safeDockerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$`)
+
+// safeK8sName matches Kubernetes object names: lowercase alphanumeric and
+// dashes only, must start and end with alphanumeric (RFC 1123 label).
+var safeK8sName = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$`)
 
 // ValidationError accumulates multiple config errors.
 type ValidationError struct {
@@ -105,11 +114,24 @@ func validateServices(cfg *Config, ve *ValidationError) {
 			if action == "webhook" && svc.HealingWebhook == "" {
 				ve.add("%s: healing_webhook required when healing action is 'webhook'", prefix)
 			}
-			if action == "docker_restart" && svc.ContainerName == "" {
-				ve.add("%s: container_name required when healing action is 'docker_restart'", prefix)
+			if action == "docker_restart" {
+				if svc.ContainerName == "" {
+					ve.add("%s: container_name required when healing action is 'docker_restart'", prefix)
+				} else if !safeDockerName.MatchString(svc.ContainerName) {
+					ve.add("%s: container_name %q contains invalid characters (alphanumeric, _, ., - only)", prefix, svc.ContainerName)
+				}
 			}
-			if action == "kubectl_restart" && (svc.Deployment == "" || svc.Namespace == "") {
-				ve.add("%s: deployment and namespace required when healing action is 'kubectl_restart'", prefix)
+			if action == "kubectl_restart" {
+				if svc.Deployment == "" || svc.Namespace == "" {
+					ve.add("%s: deployment and namespace required when healing action is 'kubectl_restart'", prefix)
+				} else {
+					if !safeK8sName.MatchString(svc.Deployment) {
+						ve.add("%s: deployment %q is not a valid Kubernetes name (lowercase alphanumeric and - only)", prefix, svc.Deployment)
+					}
+					if !safeK8sName.MatchString(svc.Namespace) {
+						ve.add("%s: namespace %q is not a valid Kubernetes name (lowercase alphanumeric and - only)", prefix, svc.Namespace)
+					}
+				}
 			}
 		}
 	}
