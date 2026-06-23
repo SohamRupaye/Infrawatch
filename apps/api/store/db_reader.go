@@ -1,11 +1,14 @@
 // Package store — db_reader.go
 // Provides a read-only TimescaleDB client for the API.
 // The engine owns all writes; the API only reads.
+// Exception: WriteConfigAudit is a narrow write used to record config
+// mutations against the config_audit table, which the API owns.
 package store
 
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -185,7 +188,18 @@ func (r *DBReader) QueryMetrics(ctx context.Context, service string, since time.
 
 // QueryIncidents returns incidents from the DB, optionally filtered by service.
 // Results are ordered: open incidents first, then most-recent-first.
-func (r *DBReader) QueryIncidents(ctx context.Context, service string) ([]DBIncident, error) {
+// limit defaults to 50 (max 500); offset enables cursor-style pagination.
+func (r *DBReader) QueryIncidents(ctx context.Context, service string, limit, offset int) ([]DBIncident, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
 	const q = `
 		SELECT
 			id::text,
@@ -200,9 +214,9 @@ func (r *DBReader) QueryIncidents(ctx context.Context, service string) ([]DBInci
 		ORDER BY
 			(resolved_at IS NULL) DESC,
 			started_at DESC
-		LIMIT 200
+		LIMIT $2 OFFSET $3
 	`
-	rows, err := r.pool.QueryContext(ctx, q, service)
+	rows, err := r.pool.QueryContext(ctx, q, service, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("querying incidents: %w", err)
 	}
@@ -408,6 +422,42 @@ func (r *DBReader) QueryUptimeByService(ctx context.Context, since time.Time) (m
 		out[service] = uptime
 	}
 	return out, rows.Err()
+}
+
+// ── Config audit ───────────────────────────────────────────────────────────
+
+// ConfigAuditEntry describes one config mutation for the audit log.
+type ConfigAuditEntry struct {
+	Action  string      `json:"action"`            // create | update | delete
+	Service string      `json:"service"`
+	UserID  string      `json:"user_id,omitempty"` // JWT subject claim, empty in no-auth mode
+	Details interface{} `json:"details,omitempty"` // full service config snapshot (create/update) or nil (delete)
+}
+
+// WriteConfigAudit asynchronously persists a config mutation to the
+// config_audit table.  Errors are logged and non-fatal — audit failures must
+// never block the mutation response.
+func (r *DBReader) WriteConfigAudit(entry ConfigAuditEntry) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		details, _ := json.Marshal(entry.Details)
+
+		const q = `
+			INSERT INTO config_audit (action, service, user_id, details)
+			VALUES ($1, $2, $3, $4)`
+
+		if _, err := r.pool.ExecContext(ctx, q,
+			entry.Action, entry.Service, entry.UserID, details,
+		); err != nil {
+			r.logger.Sugar().Errorw("failed to write config audit",
+				"action", entry.Action,
+				"service", entry.Service,
+				"error", err,
+			)
+		}
+	}()
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────

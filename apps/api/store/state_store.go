@@ -60,6 +60,13 @@ type StateStore struct {
 	//   "0"  — replay the entire stream history (no DB, cold start)
 	//   "$"  — only new events from now (DB has loaded historical state)
 	redisStartID string
+
+	// seeded is true once Initialize successfully loaded state from TimescaleDB.
+	// When false the store is operating in degraded mode: state is built solely
+	// from Redis Stream replay (starting from the beginning of the stream).
+	// The /healthz endpoint exposes this flag so operators can tell whether the
+	// dashboard is showing a cold-start snapshot or a DB-backed one.
+	seeded bool
 }
 
 const maxPoints = 2000
@@ -76,6 +83,17 @@ func NewStateStore(logger *zap.Logger) *StateStore {
 	}
 }
 
+// Seeded reports whether the store was successfully pre-populated from
+// TimescaleDB on startup.  When false the store is in degraded mode: it
+// reconstructs state by replaying the full Redis Stream history, which means
+// the dashboard may show stale or incomplete data until the engine emits new
+// events for every service.
+func (s *StateStore) Seeded() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.seeded
+}
+
 // Initialize loads the last known state per service from TimescaleDB and
 // pre-populates the in-memory store so the dashboard shows correct data
 // immediately after a restart — no need to wait for the next Redis event.
@@ -83,11 +101,14 @@ func NewStateStore(logger *zap.Logger) *StateStore {
 // After calling Initialize the Redis subscription will start from "$" (current
 // tail) instead of "0", because DB already owns the historical record.
 //
-// It is safe to call Initialize more than once (e.g. after a re-connection),
-// but it must be called before Run to take effect on the start ID.
+// Degraded behaviour when Initialize is not called or returns an error:
+//   - redisStartID stays "0" so Run replays the full Redis Stream history.
+//   - The dashboard will show state as events are replayed; this is correct but
+//     may take a moment on a large stream.
+//   - Seeded() returns false so /healthz can surface the degraded mode to operators.
 func (s *StateStore) Initialize(ctx context.Context, db *DBReader) error {
 	if db == nil {
-		s.logger.Warn("store: Initialize called with nil DBReader — skipping DB seeding")
+		s.logger.Warn("store: Initialize called with nil DBReader — running in degraded mode (Redis replay from stream start)")
 		return nil
 	}
 
@@ -116,6 +137,7 @@ func (s *StateStore) Initialize(ctx context.Context, db *DBReader) error {
 	// From this point forward, only subscribe to new Redis events.
 	// Historical state is owned by the DB.
 	s.redisStartID = "$"
+	s.seeded = true
 
 	s.logger.Sugar().Infow("store: seeded from TimescaleDB",
 		"services", len(states),
