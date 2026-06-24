@@ -92,10 +92,12 @@ func main() {
 		initCtx, initCancel := context.WithTimeout(ctx, 15*time.Second)
 		if err := stateStore.Initialize(initCtx, dbReader); err != nil {
 			// Non-fatal: log and continue — the store will self-heal via Redis replay.
-			sugar.Warnw("failed to seed state store from DB (will recover via Redis)",
+			sugar.Warnw("failed to seed state store from DB — operating in degraded mode (Redis replay from stream start); state may be incomplete until all services emit an event",
 				"error", err)
 		}
 		initCancel()
+	} else {
+		sugar.Warn("TimescaleDB not available — state store running in degraded mode (Redis replay from stream start); dashboard state will build up as events arrive")
 	}
 
 	// Subscribe to Redis streams (starts from "$" if DB seeded, "0" otherwise).
@@ -128,12 +130,36 @@ func main() {
 	r.Use(middleware.Logger(logger))
 	r.Use(middleware.CORS(cfg.API.AllowOrigins))
 
+	if cfg.API.JWTSecret == "" {
+		sugar.Warn("api.jwt_secret is not set — read endpoints are open; config mutation endpoints (POST/PUT/DELETE) are disabled until a secret is configured")
+	}
+
+	// authed covers all read endpoints. If JWTSecret is set every request must
+	// carry a valid Bearer JWT; if not set reads are open (dev/no-auth mode).
 	authed := r.Group("/")
 	if cfg.API.JWTSecret != "" {
 		authed.Use(middleware.JWT(cfg.API.JWTSecret))
 	}
 
+	// mutationAuth always enforces JWT on config-mutation endpoints. When no
+	// secret is configured these routes return 503 with a clear error rather
+	// than silently accepting unauthenticated writes.
+	mutationAuth := r.Group("/")
+	if cfg.API.JWTSecret != "" {
+		mutationAuth.Use(middleware.JWT(cfg.API.JWTSecret))
+	} else {
+		mutationAuth.Use(func(c *gin.Context) {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+				"error": "config mutations are disabled: set api.jwt_secret in the configuration to enable authenticated writes",
+			})
+		})
+	}
+	// Rate-limit all mutation endpoints to 30 requests/min per IP.
+	// Applied after auth so unauthenticated requests are rejected first.
+	mutationAuth.Use(middleware.MutationRateLimit(30))
+
 	v1 := authed.Group("/api/v1")
+	mutV1 := mutationAuth.Group("/api/v1")
 	{
 		svcH := handlers.NewServiceHandler(deps)
 		v1.GET("/services", svcH.List)
@@ -143,9 +169,9 @@ func main() {
 
 		cfgSvcH := handlers.NewConfigServiceHandler(deps)
 		v1.GET("/config/services", cfgSvcH.List)
-		v1.POST("/config/services", cfgSvcH.Create)
-		v1.PUT("/config/services/:name", cfgSvcH.Update)
-		v1.DELETE("/config/services/:name", cfgSvcH.Delete)
+		mutV1.POST("/config/services", cfgSvcH.Create)
+		mutV1.PUT("/config/services/:name", cfgSvcH.Update)
+		mutV1.DELETE("/config/services/:name", cfgSvcH.Delete)
 
 		metH := handlers.NewMetricsHandler(deps)
 		v1.GET("/metrics/:service", metH.Get)
@@ -155,11 +181,11 @@ func main() {
 		cbH := handlers.NewCircuitHandler(deps)
 		v1.GET("/circuit", cbH.List)
 		v1.GET("/circuit/:service", cbH.Get)
-		v1.POST("/circuit/:service/reset", cbH.Reset)
+		mutV1.POST("/circuit/:service/reset", cbH.Reset)
 
 		healH := handlers.NewHealHandler(deps)
 		v1.GET("/healing", healH.History)
-		v1.POST("/services/:name/heal", healH.Trigger)
+		mutV1.POST("/services/:name/heal", healH.Trigger)
 
 		incH := handlers.NewIncidentHandler(deps)
 		v1.GET("/incidents", incH.List)
@@ -169,7 +195,7 @@ func main() {
 
 		alertH := handlers.NewAlertHandler(deps)
 		v1.GET("/alerts/history", alertH.History)
-		v1.POST("/alerts/:id/ack", alertH.Acknowledge)
+		mutV1.POST("/alerts/:id/ack", alertH.Acknowledge)
 
 		logH := handlers.NewLogHandler(deps)
 		v1.GET("/logs/:container", logH.Tail)
@@ -188,6 +214,13 @@ func main() {
 			"timestamp": time.Now().UTC(),
 			"storage": gin.H{
 				"timescaledb": dbReader != nil,
+				// seeded=false means the state store is operating in degraded mode:
+				// it is replaying the full Redis Stream history instead of starting
+				// from a DB snapshot. State will be correct once replay completes.
+				"state_store_seeded": stateStore.Seeded(),
+			},
+			"auth": gin.H{
+				"enabled": cfg.API.JWTSecret != "",
 			},
 		}
 		c.JSON(http.StatusOK, status)
