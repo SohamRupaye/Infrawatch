@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SohamRupaye/infrawatch/apps/api/store"
 	engineconfig "github.com/SohamRupaye/infrawatch/apps/engine/config"
 	enginepkg "github.com/SohamRupaye/infrawatch/apps/engine/pkg"
 	"github.com/gin-gonic/gin"
@@ -106,6 +107,16 @@ func (h *ConfigServiceHandler) Create(c *gin.Context) {
 		return
 	}
 
+	if h.deps.DB != nil {
+		userID, _ := c.Get("user_id")
+		h.deps.DB.WriteConfigAudit(store.ConfigAuditEntry{
+			Action:  "create",
+			Service: svc.Name,
+			UserID:  fmt.Sprintf("%v", userID),
+			Details: svc,
+		})
+	}
+
 	c.JSON(http.StatusCreated, gin.H{"ok": true, "service": svc})
 }
 
@@ -171,6 +182,16 @@ func (h *ConfigServiceHandler) Update(c *gin.Context) {
 		return
 	}
 
+	if h.deps.DB != nil {
+		userID, _ := c.Get("user_id")
+		h.deps.DB.WriteConfigAudit(store.ConfigAuditEntry{
+			Action:  "update",
+			Service: svc.Name,
+			UserID:  fmt.Sprintf("%v", userID),
+			Details: svc,
+		})
+	}
+
 	c.JSON(http.StatusOK, gin.H{"ok": true, "service": svc})
 }
 
@@ -213,6 +234,15 @@ func (h *ConfigServiceHandler) Delete(c *gin.Context) {
 			"error":   err.Error(),
 		})
 		return
+	}
+
+	if h.deps.DB != nil {
+		userID, _ := c.Get("user_id")
+		h.deps.DB.WriteConfigAudit(store.ConfigAuditEntry{
+			Action:  "delete",
+			Service: target,
+			UserID:  fmt.Sprintf("%v", userID),
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"ok": true, "service": target})
