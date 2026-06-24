@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,10 +46,29 @@ type IncidentHandler struct{ deps Deps }
 func NewIncidentHandler(deps Deps) *IncidentHandler { return &IncidentHandler{deps} }
 
 // List godoc
-// GET /api/v1/incidents?service=<name>
+// GET /api/v1/incidents?service=<name>&limit=50&offset=0
 func (h *IncidentHandler) List(c *gin.Context) {
 	serviceFilter := c.Query("service")
 	tagFilter := c.Query("tag")
+
+	limit := 50
+	offset := 0
+	if q := c.Query("limit"); q != "" {
+		n, err := strconv.Atoi(q)
+		if err != nil || n <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be a positive integer"})
+			return
+		}
+		limit = n
+	}
+	if q := c.Query("offset"); q != "" {
+		n, err := strconv.Atoi(q)
+		if err != nil || n < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "offset must be a non-negative integer"})
+			return
+		}
+		offset = n
+	}
 
 	var tagsByService map[string][]string
 	if tagFilter != "" {
@@ -62,13 +82,13 @@ func (h *IncidentHandler) List(c *gin.Context) {
 
 	if tagFilter != "" && serviceFilter != "" {
 		if !hasTag(tagsByService[serviceFilter], tagFilter) {
-			c.JSON(http.StatusOK, gin.H{"incidents": []Incident{}, "total": 0})
+			c.JSON(http.StatusOK, gin.H{"incidents": []Incident{}, "total": 0, "has_more": false})
 			return
 		}
 	}
 
 	if h.deps.DB != nil {
-		h.listFromDB(c, serviceFilter, tagFilter, tagsByService)
+		h.listFromDB(c, serviceFilter, tagFilter, tagsByService, limit, offset)
 		return
 	}
 	h.listFromRedis(c, serviceFilter, tagFilter, tagsByService)
@@ -122,11 +142,11 @@ func (h *IncidentHandler) Export(c *gin.Context) {
 
 // ── TimescaleDB path ───────────────────────────────────────────────────────
 
-func (h *IncidentHandler) listFromDB(c *gin.Context, service, tag string, tagsByService map[string][]string) {
+func (h *IncidentHandler) listFromDB(c *gin.Context, service, tag string, tagsByService map[string][]string, limit, offset int) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	dbIncidents, err := h.deps.DB.QueryIncidents(ctx, service)
+	dbIncidents, err := h.deps.DB.QueryIncidents(ctx, service, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query incidents: " + err.Error()})
 		return
@@ -140,7 +160,13 @@ func (h *IncidentHandler) listFromDB(c *gin.Context, service, tag string, tagsBy
 		result = append(result, dbIncidentToAPI(di))
 	}
 
-	c.JSON(http.StatusOK, gin.H{"incidents": result, "total": len(result)})
+	c.JSON(http.StatusOK, gin.H{
+		"incidents": result,
+		"total":     len(result),
+		"limit":     limit,
+		"offset":    offset,
+		"has_more":  len(dbIncidents) == limit,
+	})
 }
 
 func (h *IncidentHandler) getFromDB(c *gin.Context, id string) {
@@ -251,7 +277,7 @@ func (h *IncidentHandler) GroupByTag(c *gin.Context) {
 	if h.deps.DB != nil {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 		defer cancel()
-		rows, err := h.deps.DB.QueryIncidents(ctx, "")
+		rows, err := h.deps.DB.QueryIncidents(ctx, "", 500, 0)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query incidents: " + err.Error()})
 			return
