@@ -1,43 +1,148 @@
+# =============================================================================
+# Infrawatch — Demo configuration
+#
+# 8 simulated microservices forming an e-commerce backend.
+# All health endpoints are served by the demo-services container on :4000.
+#
+# Start the full demo with:
+#   docker compose -f docker/docker-compose.yml \
+#                  -f test/docker-compose.demo.yml up --build
+# =============================================================================
+
 redis:
   addr: "redis:6379"
   password: ""
+  db: 0
 
 api:
   addr: ":8080"
   allow_origins: ["*"]
+  # Leave jwt_secret empty for unauthenticated demo access
+  jwt_secret: ""
+
+storage:
+  dsn: "postgres://infrawatch:infrawatch_secret@timescaledb:5432/infrawatch?sslmode=disable"
 
 circuit:
   failure_threshold: 3
-  success_threshold: 1
-  timeout: 10s
+  success_threshold: 2
+  timeout: 15s
+
+anomaly:
+  latency_multiplier:    2.5   # flag if p95 > 2.5× baseline
+  memory_growth_rate_mb: 50
+  baseline_window:       5m
+  evaluation_window:     1m
 
 alerts:
   escalate_on_worsening: true
+  # Uncomment and fill to enable real alert channels:
+  # slack:
+  #   webhook_url: ${SLACK_WEBHOOK_URL}
+  #   channel: "#infrawatch-demo"
+  # webhook:
+  #   url: http://demo-services:4000/webhook-sink
+  #   secret: demo-secret
 
 services:
-  - name: "auth-service"
-    url: "http://demo-services:4000/health/auth"
-    interval: 5s
-    timeout: 2s
-    method: "GET"
-    expect_status: 200
-    tags: ["core", "security"]
-    healing_actions: ["webhook"]
-    healing_webhook: "http://demo-services:4000/heal/auth"
 
-  - name: "db-service"
-    url: "http://demo-services:4000/health/db"
+  # ── Core tier ──────────────────────────────────────────────────────────────
+
+  - name: "user-service"
+    url: "http://demo-services:4000/health/user-service"
     interval: 5s
-    timeout: 2s
-    method: "GET"
+    timeout: 3s
+    method: GET
     expect_status: 200
-    tags: ["core", "storage"]
+    tags: ["core", "auth"]
+    healing_actions: ["webhook"]
+    healing_webhook: "http://demo-services:4000/services/user-service/heal"
+
+  - name: "product-catalog"
+    url: "http://demo-services:4000/health/product-catalog"
+    interval: 5s
+    timeout: 3s
+    method: GET
+    expect_status: 200
+    tags: ["core", "data"]
+    healing_actions: ["webhook"]
+    healing_webhook: "http://demo-services:4000/services/product-catalog/heal"
+
+  # ── Data tier ──────────────────────────────────────────────────────────────
+
+  - name: "inventory-service"
+    url: "http://demo-services:4000/health/inventory-service"
+    interval: 5s
+    timeout: 5s
+    method: GET
+    expect_status: 200
+    tags: ["data", "warehouse"]
+    dependencies: ["product-catalog"]
+    healing_actions: ["webhook"]
+    healing_webhook: "http://demo-services:4000/services/inventory-service/heal"
+
+  - name: "search-service"
+    url: "http://demo-services:4000/health/search-service"
+    interval: 5s
+    timeout: 4s
+    method: GET
+    expect_status: 200
+    tags: ["search"]
+    dependencies: ["product-catalog"]
+    healing_actions: ["webhook"]
+    healing_webhook: "http://demo-services:4000/services/search-service/heal"
+
+  # ── Business tier ──────────────────────────────────────────────────────────
+
+  - name: "payment-service"
+    url: "http://demo-services:4000/health/payment-service"
+    interval: 5s
+    timeout: 5s
+    method: GET
+    expect_status: 200
+    tags: ["business", "critical"]
+    dependencies: ["user-service"]
+    healing_actions: ["webhook"]
+    healing_webhook: "http://demo-services:4000/services/payment-service/heal"
+
+  - name: "order-service"
+    url: "http://demo-services:4000/health/order-service"
+    interval: 5s
+    timeout: 5s
+    method: GET
+    expect_status: 200
+    tags: ["business", "critical"]
+    dependencies: ["user-service", "product-catalog", "payment-service", "inventory-service"]
+    healing_actions: ["webhook"]
+    healing_webhook: "http://demo-services:4000/services/order-service/heal"
+
+  # ── Messaging tier ─────────────────────────────────────────────────────────
+
+  - name: "notification-svc"
+    url: "http://demo-services:4000/health/notification-svc"
+    interval: 5s
+    timeout: 3s
+    method: GET
+    expect_status: 200
+    tags: ["messaging"]
+    dependencies: ["user-service"]
+    healing_actions: ["webhook"]
+    healing_webhook: "http://demo-services:4000/services/notification-svc/heal"
+
+  # ── Edge tier ──────────────────────────────────────────────────────────────
 
   - name: "api-gateway"
-    url: "http://demo-services:4000/health/api"
+    url: "http://demo-services:4000/health/api-gateway"
     interval: 5s
-    timeout: 2s
-    method: "GET"
+    timeout: 3s
+    method: GET
     expect_status: 200
-    tags: ["edge", "routing"]
-    dependencies: ["auth-service", "db-service"]
+    tags: ["edge"]
+    dependencies:
+      - user-service
+      - product-catalog
+      - order-service
+      - payment-service
+      - search-service
+    healing_actions: ["webhook"]
+    healing_webhook: "http://demo-services:4000/services/api-gateway/heal"

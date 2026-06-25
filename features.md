@@ -24,7 +24,7 @@ Maps every implemented feature to its source files. Use this as a reference when
 | File | Role |
 |---|---|
 | `apps/engine/internal/circuit/breaker.go` | Per-service circuit breaker logic (`CLOSED → OPEN → HALF_OPEN → CLOSED`). |
-| `apps/engine/internal/circuit/registery.go` | Registry holding one breaker per service name; thread-safe snapshot API consumed by the API layer. |
+| `apps/engine/internal/circuit/registry.go` | Registry holding one breaker per service name; thread-safe snapshot API consumed by the API layer. |
 
 Config keys: `circuit.failure_threshold`, `circuit.success_threshold`, `circuit.timeout`
 

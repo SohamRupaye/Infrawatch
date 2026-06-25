@@ -1,13 +1,37 @@
+# =============================================================================
+# Docker Compose overlay — Demo mode
+#
+# Extends docker/docker-compose.yml to:
+#   • Mount the demo config instead of the production one
+#   • Add the demo-services simulation container
+#   • Expose the control-plane port (4000) to the host
+#
+# Usage:
+#   docker compose \
+#     -f docker/docker-compose.yml \
+#     -f test/docker-compose.demo.yml \
+#     up --build
+# =============================================================================
+
 services:
+
+  # Override the config volume for both engine and api
   engine:
     volumes:
       - ../test/infrawatch.demo.yaml:/etc/infrawatch/infrawatch.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      demo-services:
+        condition: service_healthy
 
   api:
     volumes:
       - ../test/infrawatch.demo.yaml:/etc/infrawatch/infrawatch.yaml:ro
+    depends_on:
+      demo-services:
+        condition: service_healthy
 
+  # ── Demo microservices simulator ───────────────────────────────────────────
   demo-services:
     image: node:20-alpine
     command: node /app/demo-services.js
@@ -15,3 +39,10 @@ services:
       - ../test/demo-services.js:/app/demo-services.js:ro
     ports:
       - "4000:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 4000 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 10
+    restart: unless-stopped
