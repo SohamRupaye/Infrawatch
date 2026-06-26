@@ -20,7 +20,17 @@ type CheckResult struct {
 	ResponseTime time.Duration
 	Error        error
 	Timestamp    time.Time
+	// Source identifies where this result came from: "poller" for a real
+	// HTTP check, "alertmanager" for a passive-mode service driven by an
+	// external alert floor. Defaults to "" (treated as "poller").
+	Source string
 }
+
+// Result sources.
+const (
+	SourcePoller       = "poller"
+	SourceAlertmanager = "alertmanager"
+)
 
 // Checker performs HTTP health checks for a service.
 type Checker struct {

@@ -43,6 +43,15 @@ type ServiceState struct {
 	// Counters used by the FSM
 	totalChecks int
 	totalErrors int
+
+	// alertFloorActive/alertFloorReason hold an externally-asserted "this
+	// service is down" signal (e.g. a firing Alertmanager alert) for a
+	// passive-mode service. The floor is consulted by the poller instead of
+	// an HTTP check; clearing it doesn't force recovery, it just lets the
+	// normal FSM ratchet back up to HEALTHY over subsequent ticks like any
+	// other recovering service.
+	alertFloorActive bool
+	alertFloorReason string
 }
 
 // NewServiceState creates a new ServiceState for the given service name.
@@ -79,6 +88,30 @@ func (s *ServiceState) Snapshot() ServiceStateSnapshot {
 		Transitions:      transitions,
 		UptimePct:        s.uptimePct(),
 	}
+}
+
+// SetFloor asserts an externally-driven "down" signal for this service.
+func (s *ServiceState) SetFloor(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.alertFloorActive = true
+	s.alertFloorReason = reason
+}
+
+// ClearFloor releases the externally-driven "down" signal. This does not by
+// itself change CurrentState — the next poll tick re-evaluates normally.
+func (s *ServiceState) ClearFloor() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.alertFloorActive = false
+	s.alertFloorReason = ""
+}
+
+// Floor returns whether an external alert floor is currently active, and why.
+func (s *ServiceState) Floor() (bool, string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.alertFloorActive, s.alertFloorReason
 }
 
 // uptimePct returns the rolling uptime percentage (must be called with lock held).

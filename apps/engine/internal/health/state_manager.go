@@ -61,13 +61,7 @@ func NewStateManager(
 // changes to TimescaleDB, emits Redis events, fires alerts, and triggers
 // healing when needed.
 func (sm *StateManager) Record(ctx context.Context, svc config.ServiceConfig, result CheckResult) {
-	sm.mu.Lock()
-	state, ok := sm.states[svc.Name]
-	if !ok {
-		state = NewServiceState(svc.Name)
-		sm.states[svc.Name] = state
-	}
-	sm.mu.Unlock()
+	state := sm.getOrCreateState(svc.Name)
 
 	errMsg := ""
 	if result.Error != nil {
@@ -185,6 +179,37 @@ func (sm *StateManager) maybeTriggerHealing(ctx context.Context, svc config.Serv
 			Timestamp:   time.Now(),
 		})
 	}()
+}
+
+// getOrCreateState returns the ServiceState for name, creating one if this
+// is the first time it's been referenced (mirrors the get-or-create block at
+// the top of Record).
+func (sm *StateManager) getOrCreateState(name string) *ServiceState {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	state, ok := sm.states[name]
+	if !ok {
+		state = NewServiceState(name)
+		sm.states[name] = state
+	}
+	return state
+}
+
+// SetAlertFloor asserts an externally-driven "down" signal for a service
+// (e.g. a firing Alertmanager alert for a passive-mode service).
+func (sm *StateManager) SetAlertFloor(name, reason string) {
+	sm.getOrCreateState(name).SetFloor(reason)
+}
+
+// ClearAlertFloor releases a previously-asserted external "down" signal.
+func (sm *StateManager) ClearAlertFloor(name string) {
+	sm.getOrCreateState(name).ClearFloor()
+}
+
+// FloorStatus reports whether an external alert floor is active for a
+// service, and why.
+func (sm *StateManager) FloorStatus(name string) (bool, string) {
+	return sm.getOrCreateState(name).Floor()
 }
 
 // GetSnapshot returns the current state snapshot for a service.
