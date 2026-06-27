@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils'
+import { STATE_DOT } from '@/lib/stateStyles'
 import type { ServiceState } from '@/api/types'
 
 const STATE_STYLES: Record<ServiceState, string> = {
@@ -8,15 +9,6 @@ const STATE_STYLES: Record<ServiceState, string> = {
   DEAD:      'bg-red-50 text-red-700 border-red-200',
   RECOVERING:'bg-blue-50 text-blue-700 border-blue-200',
   UNKNOWN:   'bg-gray-100 text-gray-500 border-gray-200',
-}
-
-export const STATE_DOT: Record<ServiceState, string> = {
-  HEALTHY:   'bg-emerald-500',
-  DEGRADED:  'bg-yellow-500',
-  UNHEALTHY: 'bg-orange-500',
-  DEAD:      'bg-red-500',
-  RECOVERING:'bg-blue-500',
-  UNKNOWN:   'bg-gray-400',
 }
 
 interface Props {
