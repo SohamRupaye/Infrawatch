@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/SohamRupaye/infrawatch/apps/engine/internal/circuit"
 	"github.com/SohamRupaye/infrawatch/apps/engine/streams"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -48,6 +49,16 @@ type AnomalyEvent struct {
 	Value       float64   `json:"value"`
 	Baseline    float64   `json:"baseline"`
 	Timestamp   time.Time `json:"timestamp"`
+}
+
+// CircuitStateEvent carries a service's current circuit breaker snapshot to
+// the API's read model, published on every poll and immediately after a
+// manual reset so /api/v1/circuit reflects real breaker state instead of a
+// locally-guessed one.
+type CircuitStateEvent struct {
+	ServiceName string                  `json:"service_name"`
+	Snapshot    circuit.BreakerSnapshot `json:"snapshot"`
+	Timestamp   time.Time               `json:"timestamp"`
 }
 
 // Bus wraps the Redis client and provides typed publish methods.
@@ -97,6 +108,11 @@ func (b *Bus) PublishHealingEvent(ctx context.Context, evt HealingEvent) {
 // PublishAnomaly publishes an anomaly detection event.
 func (b *Bus) PublishAnomaly(ctx context.Context, evt AnomalyEvent) {
 	b.publish(ctx, streams.Anomalies, evt)
+}
+
+// PublishCircuitState publishes a circuit breaker snapshot for a service.
+func (b *Bus) PublishCircuitState(ctx context.Context, evt CircuitStateEvent) {
+	b.publish(ctx, streams.CircuitState, evt)
 }
 
 // publish serialises evt to JSON and adds it to the named Redis Stream.
