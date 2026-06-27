@@ -4,7 +4,8 @@ import { Link } from 'react-router-dom'
 import { RefreshCw, AlertTriangle, Activity, Clock3, ShieldCheck, LayoutGrid, List, Search, X } from 'lucide-react'
 import { fetchServices } from '@/api/services'
 import { useLiveStore } from '@/store/liveStore'
-import { StateBadge, STATE_DOT } from '@/components/StateBadge'
+import { StateBadge } from '@/components/StateBadge'
+import { STATE_DOT } from '@/lib/stateStyles'
 import { Spinner } from '@/components/Spinner'
 import { EmptyState } from '@/components/EmptyState'
 import { cn } from '@/lib/utils'
@@ -166,7 +167,7 @@ export function Dashboard() {
                 background: 'var(--surface)',
                 borderColor: 'var(--border-2)',
                 color: 'var(--text-1)',
-                // @ts-ignore
+                // @ts-expect-error CSS custom property isn't in React.CSSProperties
                 '--tw-ring-color': 'var(--accent)',
               }}
             />
