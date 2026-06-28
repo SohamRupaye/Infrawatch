@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -32,18 +33,11 @@ func Logger(logger *zap.Logger) gin.HandlerFunc {
 func JWT(secret string) gin.HandlerFunc {
 	key := []byte(secret)
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing Authorization header"})
+		tokenStr, err := extractToken(c)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return
 		}
-
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid Authorization format, expected: Bearer <token>"})
-			return
-		}
-		tokenStr := parts[1]
 
 		token, err := jwt.ParseWithClaims(
 			tokenStr,
@@ -65,4 +59,25 @@ func JWT(secret string) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// extractToken reads the bearer token from the Authorization header, falling
+// back to a ?token= query param when no header is present. The fallback only
+// matters for WebSocket routes (/ws, /ws/logs/:container) since browsers
+// cannot set custom headers on the handshake request; every other client
+// keeps using the header as normal.
+func extractToken(c *gin.Context) (string, error) {
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		if q := c.Query("token"); q != "" {
+			return q, nil
+		}
+		return "", errors.New("missing Authorization header")
+	}
+
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
+		return "", errors.New("invalid Authorization format, expected: Bearer <token>")
+	}
+	return parts[1], nil
 }
