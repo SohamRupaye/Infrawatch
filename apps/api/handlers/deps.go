@@ -21,7 +21,8 @@ type Deps struct {
 // The full engine config is loaded by main.go; only these fields
 // are passed through Deps to avoid importing the engine config package.
 type APIConfig struct {
-	DockerSocketPath string
-	JWTSecret        string
-	ConfigPath       string
+	DockerSocketPath          string
+	JWTSecret                 string
+	ConfigPath                string
+	AlertmanagerWebhookSecret string
 }

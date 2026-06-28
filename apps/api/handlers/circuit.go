@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	enginepkg "github.com/SohamRupaye/infrawatch/apps/engine/pkg"
 )
 
 // CircuitHandler exposes circuit breaker state and the manual reset action.
@@ -36,7 +35,9 @@ func (h *CircuitHandler) Get(c *gin.Context) {
 
 // Reset godoc
 // POST /api/v1/circuit/:service/reset
-// Publishes a reset command to the engine via Redis and locally clears the circuit snapshot.
+// Publishes a reset command to the engine via Redis. The engine performs the
+// actual reset and publishes the real resulting breaker snapshot back over
+// Redis — this handler does not assert success itself.
 func (h *CircuitHandler) Reset(c *gin.Context) {
 	name := c.Param("service")
 
@@ -48,19 +49,8 @@ func (h *CircuitHandler) Reset(c *gin.Context) {
 		return
 	}
 
-	// Optimistic local update
-	h.deps.Store.UpdateCircuit(name, enginepkg.BreakerSnapshot{
-		State:          enginepkg.BreakerStateClosed,
-		LastTransition: time.Now(),
+	c.JSON(http.StatusAccepted, gin.H{
+		"service": name,
+		"message": "circuit reset command sent — engine will act on it at the next decision cycle",
 	})
-
-	h.deps.Bus.PublishStateChange(ctx, enginepkg.StateChangeEvent{
-		ServiceName:   name,
-		PreviousState: "OPEN",
-		NewState:      "RECOVERING",
-		Reason:        "circuit manually reset via API",
-		Timestamp:     time.Now(),
-	})
-
-	c.JSON(http.StatusOK, gin.H{"service": name, "message": "circuit reset command sent"})
 }

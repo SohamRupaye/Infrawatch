@@ -9,11 +9,11 @@ import (
 	"strconv"
 	"time"
 
-	dockerclient "github.com/docker/docker/client"
+	apiwsocket "github.com/SohamRupaye/infrawatch/apps/api/websocket"
 	"github.com/docker/docker/api/types/container"
+	dockerclient "github.com/docker/docker/client"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	apiwsocket "github.com/SohamRupaye/infrawatch/apps/api/websocket"
 	"go.uber.org/zap"
 )
 
