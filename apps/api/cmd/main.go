@@ -114,9 +114,10 @@ func main() {
 		Hub:   hub,
 		DB:    dbReader, // nil-safe; handlers check before using
 		Cfg: &handlers.APIConfig{
-			DockerSocketPath: cfg.Docker.SocketPath,
-			JWTSecret:        cfg.API.JWTSecret,
-			ConfigPath:       cfgPath,
+			DockerSocketPath:          cfg.Docker.SocketPath,
+			JWTSecret:                 cfg.API.JWTSecret,
+			ConfigPath:                cfgPath,
+			AlertmanagerWebhookSecret: cfg.Alertmanager.WebhookSecret,
 		},
 		Logger: logger,
 	}
@@ -201,8 +202,16 @@ func main() {
 		v1.GET("/logs/:container", logH.Tail)
 	}
 
-	r.GET("/ws", apiwsocket.ServeWS(hub, logger))
-	r.GET("/ws/logs/:container", handlers.NewLogHandler(deps).WSLogs(hub, logger))
+	// WebSocket routes carry the JWT via ?token= (browsers cannot set custom
+	// headers on the handshake request) — see middleware.JWT's extractToken.
+	authed.GET("/ws", apiwsocket.ServeWS(hub, logger))
+	authed.GET("/ws/logs/:container", handlers.NewLogHandler(deps).WSLogs(hub, logger))
+
+	// Alertmanager can't do interactive JWT auth or respect our per-IP mutation
+	// limiter (it may legitimately burst), so this route sits outside both
+	// groups and authenticates itself via a shared secret header instead.
+	amH := handlers.NewAlertmanagerWebhookHandler(deps)
+	r.POST("/api/v1/webhooks/alertmanager", amH.Receive)
 
 	statusH := handlers.NewStatusHandler(deps)
 	r.GET("/status", statusH.Page)

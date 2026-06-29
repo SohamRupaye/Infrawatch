@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
+	enginepkg "github.com/SohamRupaye/infrawatch/apps/engine/pkg"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	enginepkg "github.com/SohamRupaye/infrawatch/apps/engine/pkg"
 	"go.uber.org/zap"
 )
 
