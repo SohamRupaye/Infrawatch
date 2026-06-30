@@ -12,7 +12,7 @@ import (
 
 const (
 	// maxSamples is the ring-buffer size per (service, hour) bucket.
-	maxSamples    = 1000
+	maxSamples = 1000
 	// p95Percentile is the target percentile for threshold calculation.
 	p95Percentile = 0.95
 )

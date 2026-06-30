@@ -13,7 +13,6 @@ type AnomalyType string
 
 const (
 	AnomalyLatency AnomalyType = "LATENCY"
-	AnomalyMemory  AnomalyType = "MEMORY"
 )
 
 // Anomaly represents a detected anomaly event.
@@ -26,24 +25,22 @@ type Anomaly struct {
 	Timestamp   time.Time
 }
 
-// Detector wraps both the latency and memory anomaly sub-systems.
+// Detector wraps the latency anomaly sub-system.
 type Detector struct {
 	mu      sync.Mutex
 	cfg     config.AnomalyConfig
 	latency *LatencyDetector
-	memory  *MemoryDetector
 	logger  *zap.Logger
 
 	// Channel other parts of the system subscribe to for anomaly events
 	anomalyCh chan Anomaly
 }
 
-// NewDetector creates a Detector with both sub-detectors initialised.
+// NewDetector creates a Detector with the latency sub-detector initialised.
 func NewDetector(cfg config.AnomalyConfig, logger *zap.Logger) *Detector {
 	return &Detector{
 		cfg:       cfg,
 		latency:   NewLatencyDetector(cfg),
-		memory:    NewMemoryDetector(cfg),
 		logger:    logger,
 		anomalyCh: make(chan Anomaly, 256),
 	}
@@ -63,22 +60,6 @@ func (d *Detector) RecordLatency(serviceName string, responseTime time.Duration)
 		case d.anomalyCh <- anomaly:
 		default:
 			// Channel full — drop, not block
-		}
-	}
-}
-
-// RecordMemory feeds a container memory sample (in bytes) into the detector.
-func (d *Detector) RecordMemory(serviceName string, memoryBytes int64) {
-	anomaly, detected := d.memory.Record(serviceName, memoryBytes)
-	if detected {
-		d.logger.Sugar().Warnw("memory anomaly detected",
-			"service", serviceName,
-			"growth_mb_per_min", anomaly.Value,
-			"threshold_mb_per_min", anomaly.Baseline,
-		)
-		select {
-		case d.anomalyCh <- anomaly:
-		default:
 		}
 	}
 }
