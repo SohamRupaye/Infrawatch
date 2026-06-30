@@ -428,7 +428,7 @@ func (r *DBReader) QueryUptimeByService(ctx context.Context, since time.Time) (m
 
 // ConfigAuditEntry describes one config mutation for the audit log.
 type ConfigAuditEntry struct {
-	Action  string      `json:"action"`            // create | update | delete
+	Action  string      `json:"action"` // create | update | delete
 	Service string      `json:"service"`
 	UserID  string      `json:"user_id,omitempty"` // JWT subject claim, empty in no-auth mode
 	Details interface{} `json:"details,omitempty"` // full service config snapshot (create/update) or nil (delete)

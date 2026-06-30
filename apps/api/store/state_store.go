@@ -172,6 +172,15 @@ func (s *StateStore) Run(ctx context.Context, bus *enginepkg.Bus) {
 		s.applyMetric(evt)
 	})
 
+	go bus.Subscribe(ctx, enginepkg.StreamCircuitState, startID, func(_ string, payload []byte) {
+		var evt enginepkg.CircuitStateEvent
+		if err := json.Unmarshal(payload, &evt); err != nil {
+			s.logger.Sugar().Warnw("store: bad circuit_state payload", "error", err)
+			return
+		}
+		s.UpdateCircuit(evt.ServiceName, evt.Snapshot)
+	})
+
 	<-ctx.Done()
 }
 
