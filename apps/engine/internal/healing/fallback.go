@@ -16,8 +16,8 @@ import (
 // fallbackRegistry stores the currently active fallback URL per service.
 // Exposed through the API so the dashboard can show reroute state.
 var (
-	fallbackMu       sync.RWMutex
-	activeFallbacks  = make(map[string]string) // service name → fallback URL
+	fallbackMu      sync.RWMutex
+	activeFallbacks = make(map[string]string) // service name → fallback URL
 )
 
 // GetActiveFallback returns the active fallback URL for a service, if any.

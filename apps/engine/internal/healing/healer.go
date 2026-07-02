@@ -28,10 +28,10 @@ func (r *HealResult) ErrorString() string {
 
 // attemptTracker tracks per-service restart counts for enforcement of MaxRestartAttempts.
 type attemptTracker struct {
-	mu       sync.Mutex
-	counts   map[string]int
-	resetAt  map[string]time.Time
-	window   time.Duration
+	mu      sync.Mutex
+	counts  map[string]int
+	resetAt map[string]time.Time
+	window  time.Duration
 }
 
 func newAttemptTracker(window time.Duration) *attemptTracker {
