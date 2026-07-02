@@ -111,6 +111,32 @@ func (p *Poller) UpsertService(ctx context.Context, svc config.ServiceConfig) {
 	p.logger.Sugar().Infow("poller service upserted", "service", svc.Name, "updated", updated)
 }
 
+// Lookup returns the current config for a service by name, thread-safe
+// against concurrent UpsertService/RemoveService calls.
+func (p *Poller) Lookup(name string) (config.ServiceConfig, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, svc := range p.cfg.Services {
+		if svc.Name == name {
+			return svc, true
+		}
+	}
+	return config.ServiceConfig{}, false
+}
+
+// PollNow runs one check cycle for a service immediately instead of waiting
+// for its next tick. Used to give passive services (and anything else that
+// wants a fast re-evaluation) an immediate result after an external signal
+// changes their alert floor. Returns false if the service isn't known.
+func (p *Poller) PollNow(ctx context.Context, name string) bool {
+	svc, ok := p.Lookup(name)
+	if !ok {
+		return false
+	}
+	p.poll(ctx, svc)
+	return true
+}
+
 // RemoveService stops polling for a service and removes it from active config.
 func (p *Poller) RemoveService(name string) {
 	p.mu.Lock()
@@ -174,7 +200,26 @@ func (p *Poller) poll(ctx context.Context, svc config.ServiceConfig) {
 		return
 	}
 
-	result := p.checker.Check(ctx, svc)
+	var result CheckResult
+	if svc.IsPassive() {
+		// Passive services have no URL to poll — their health is driven by
+		// an external alert floor (e.g. Alertmanager) instead of a real
+		// HTTP check. A one-shot "resolved" signal only clears the floor;
+		// it does NOT force HEALTHY here, so the FSM's normal recovery
+		// ratchet (DEGRADED -> RECOVERING -> HEALTHY) still applies.
+		floorActive, reason := p.stateMgr.FloorStatus(svc.Name)
+		result = CheckResult{
+			ServiceName: svc.Name,
+			OK:          !floorActive,
+			Timestamp:   time.Now(),
+			Source:      SourceAlertmanager,
+		}
+		if floorActive {
+			result.Error = fmt.Errorf("external alert: %s", reason)
+		}
+	} else {
+		result = p.checker.Check(ctx, svc)
+	}
 
 	// If the service's own check passed, verify all declared dependencies are
 	// healthy.  A service that depends on a DEAD or UNHEALTHY upstream should
@@ -198,8 +243,19 @@ func (p *Poller) poll(ctx context.Context, svc config.ServiceConfig) {
 		breaker.RecordFailure()
 	}
 
-	// Feed latency into anomaly detector
-	p.anomaly.RecordLatency(svc.Name, result.ResponseTime)
+	// Publish the breaker's current snapshot so the API's read model reflects
+	// real circuit state instead of guessing at it.
+	p.bus.PublishCircuitState(ctx, events.CircuitStateEvent{
+		ServiceName: svc.Name,
+		Snapshot:    breaker.Snapshot(),
+		Timestamp:   time.Now(),
+	})
+
+	// Feed latency into anomaly detector — meaningless for passive services,
+	// which have no real response time.
+	if !svc.IsPassive() {
+		p.anomaly.RecordLatency(svc.Name, result.ResponseTime)
+	}
 
 	// Let the state manager apply FSM transitions, alerts, and healing
 	p.stateMgr.Record(ctx, svc, result)

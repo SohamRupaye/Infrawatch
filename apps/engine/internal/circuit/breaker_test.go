@@ -99,10 +99,10 @@ func TestBreaker_OpenStaysOpenBeforeTimeout(t *testing.T) {
 
 func TestBreaker_HalfOpenSuccessCloses(t *testing.T) {
 	b := NewBreaker(cfg(1, 1, 10*time.Millisecond))
-	b.RecordFailure()            // → OPEN
+	b.RecordFailure() // → OPEN
 	time.Sleep(20 * time.Millisecond)
-	b.IsOpen()                   // promotes to HALF_OPEN
-	b.RecordSuccess()            // 1 success, threshold=1 → CLOSED
+	b.IsOpen()        // promotes to HALF_OPEN
+	b.RecordSuccess() // 1 success, threshold=1 → CLOSED
 	if b.State() != StateClosed {
 		t.Errorf("expected CLOSED after success in HALF_OPEN, got %s", b.State())
 	}

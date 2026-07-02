@@ -164,8 +164,8 @@ func TestFSM_DeadFirstSuccessGoesRecovering(t *testing.T) {
 
 func TestFSM_TransitionHistoryRecorded(t *testing.T) {
 	s := NewServiceState("svc")
-	s.Transition(true, 10, "")   // UNKNOWN → HEALTHY
-	s.Transition(false, 0, "e")  // HEALTHY → DEGRADED
+	s.Transition(true, 10, "")  // UNKNOWN → HEALTHY
+	s.Transition(false, 0, "e") // HEALTHY → DEGRADED
 	snap := s.Snapshot()
 	if len(snap.Transitions) != 2 {
 		t.Errorf("expected 2 transitions, got %d", len(snap.Transitions))
@@ -289,10 +289,10 @@ func TestFSM_FullRecoveryPath(t *testing.T) {
 		want State
 	}
 	steps := []step{
-		{true, StateHealthy},   // UNKNOWN → HEALTHY
-		{true, StateHealthy},   // stay
-		{false, StateDegraded}, // HEALTHY → DEGRADED (1 fail)
-		{false, StateDegraded}, // stay
+		{true, StateHealthy},    // UNKNOWN → HEALTHY
+		{true, StateHealthy},    // stay
+		{false, StateDegraded},  // HEALTHY → DEGRADED (1 fail)
+		{false, StateDegraded},  // stay
 		{false, StateUnhealthy}, // DEGRADED → UNHEALTHY (3 fails)
 		{false, StateUnhealthy}, // stay (4 fails)
 		{false, StateDead},      // UNHEALTHY → DEAD (5 fails)
