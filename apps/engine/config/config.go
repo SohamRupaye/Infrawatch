@@ -9,20 +9,30 @@ import (
 
 // Config is the top-level configuration for Infrawatch.
 type Config struct {
-	Services []ServiceConfig `yaml:"services"`
-	Redis    RedisConfig     `yaml:"redis"`
-	API      APIConfig       `yaml:"api"`
-	Circuit  CircuitConfig   `yaml:"circuit"`
-	Anomaly  AnomalyConfig   `yaml:"anomaly"`
-	Alerts   AlertsConfig    `yaml:"alerts"`
-	Healing  HealingConfig   `yaml:"healing"`
-	Docker   DockerConfig    `yaml:"docker"`
-	Storage  StorageConfig   `yaml:"storage"`
+	Services     []ServiceConfig    `yaml:"services"`
+	Redis        RedisConfig        `yaml:"redis"`
+	API          APIConfig          `yaml:"api"`
+	Circuit      CircuitConfig      `yaml:"circuit"`
+	Anomaly      AnomalyConfig      `yaml:"anomaly"`
+	Alerts       AlertsConfig       `yaml:"alerts"`
+	Healing      HealingConfig      `yaml:"healing"`
+	Docker       DockerConfig       `yaml:"docker"`
+	Storage      StorageConfig      `yaml:"storage"`
+	Alertmanager AlertmanagerConfig `yaml:"alertmanager"`
 }
+
+// Service modes. Active services are polled directly over HTTP by the
+// engine. Passive services have no poll URL — their health is driven
+// entirely by external signals (e.g. Alertmanager webhook alerts).
+const (
+	ModeActive  = "active"
+	ModePassive = "passive"
+)
 
 // ServiceConfig defines a single monitored service.
 type ServiceConfig struct {
 	Name         string            `yaml:"name"           json:"name"`
+	Mode         string            `yaml:"mode"           json:"mode"` // "active" (default) or "passive"
 	URL          string            `yaml:"url"            json:"url"`
 	Interval     time.Duration     `yaml:"interval"       json:"interval"`
 	Timeout      time.Duration     `yaml:"timeout"        json:"timeout"`
@@ -35,13 +45,25 @@ type ServiceConfig struct {
 
 	// Container for Docker-native health + self-healing
 	ContainerName string `yaml:"container_name" json:"container_name"`
-	Namespace     string `yaml:"namespace"      json:"namespace"`   // for K8s
-	Deployment    string `yaml:"deployment"     json:"deployment"`  // for K8s
+	Namespace     string `yaml:"namespace"      json:"namespace"`  // for K8s
+	Deployment    string `yaml:"deployment"     json:"deployment"` // for K8s
 
 	// Per-service overrides
 	HealingActions []string `yaml:"healing_actions" json:"healing_actions"` // docker_restart, kubectl_restart, fallback, webhook
 	FallbackURL    string   `yaml:"fallback_url"    json:"fallback_url"`
 	HealingWebhook string   `yaml:"healing_webhook" json:"healing_webhook"`
+}
+
+// IsPassive reports whether the service is driven by external signals
+// (e.g. Alertmanager) instead of the engine's own HTTP poller.
+func (s ServiceConfig) IsPassive() bool {
+	return s.Mode == ModePassive
+}
+
+// AlertmanagerConfig configures the API's Alertmanager webhook receiver.
+type AlertmanagerConfig struct {
+	Enabled       bool   `yaml:"enabled"`
+	WebhookSecret string `yaml:"webhook_secret"`
 }
 
 // RedisConfig holds Redis connection settings.
@@ -69,10 +91,7 @@ type CircuitConfig struct {
 
 // AnomalyConfig defines anomaly detection settings.
 type AnomalyConfig struct {
-	LatencyMultiplier  float64       `yaml:"latency_multiplier"`    // default 2.0
-	MemoryGrowthRateMB float64       `yaml:"memory_growth_rate_mb"` // MB/min threshold
-	BaselineWindow     time.Duration `yaml:"baseline_window"`
-	EvaluationWindow   time.Duration `yaml:"evaluation_window"`
+	LatencyMultiplier float64 `yaml:"latency_multiplier"` // default 2.0
 }
 
 // AlertsConfig holds multi-channel alert configuration.
@@ -191,15 +210,6 @@ func applyDefaults(cfg *Config) {
 	if cfg.Anomaly.LatencyMultiplier == 0 {
 		cfg.Anomaly.LatencyMultiplier = 2.0
 	}
-	if cfg.Anomaly.MemoryGrowthRateMB == 0 {
-		cfg.Anomaly.MemoryGrowthRateMB = 10.0
-	}
-	if cfg.Anomaly.BaselineWindow == 0 {
-		cfg.Anomaly.BaselineWindow = 60 * time.Minute
-	}
-	if cfg.Anomaly.EvaluationWindow == 0 {
-		cfg.Anomaly.EvaluationWindow = 5 * time.Minute
-	}
 	if cfg.Healing.MaxRestartAttempts == 0 {
 		cfg.Healing.MaxRestartAttempts = 3
 	}
@@ -219,11 +229,19 @@ func applyDefaults(cfg *Config) {
 	// Apply service-level defaults
 	for i := range cfg.Services {
 		svc := &cfg.Services[i]
+		if svc.Mode == "" {
+			svc.Mode = ModeActive
+		}
 		if svc.Interval == 0 {
 			svc.Interval = 30 * time.Second
 		}
 		if svc.Timeout == 0 {
 			svc.Timeout = 5 * time.Second
+		}
+		// Passive services have no URL to poll, so HTTP-check-specific
+		// defaults would be meaningless.
+		if svc.Mode == ModePassive {
+			continue
 		}
 		if svc.Method == "" {
 			svc.Method = "GET"

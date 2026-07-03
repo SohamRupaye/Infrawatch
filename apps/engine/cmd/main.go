@@ -126,15 +126,93 @@ func main() {
 	sugar.Infow("starting engine", "services", len(cfg.Services))
 	poller.Start(ctx)
 
+	// ── External alert signal listener ────────────────────────────────────────
+	// Passive-mode services are driven by external signals (e.g. Alertmanager)
+	// instead of the poller's own HTTP checks.
+	alertSignalHandler := health.NewAlertSignalHandler(poller, stateMgr, logger)
+	go bus.Subscribe(ctx, streams.ExternalAlerts, "$", func(_ string, payload []byte) {
+		var sig enginepkg.ExternalAlertSignal
+		if err := json.Unmarshal(payload, &sig); err != nil {
+			sugar.Warnw("invalid external alert signal payload", "error", err)
+			return
+		}
+		alertSignalHandler.Handle(ctx, health.AlertSignal{
+			ServiceName: sig.ServiceName,
+			Status:      sig.Status,
+			Reason:      sig.Reason,
+		})
+	})
+
+	// ── Anomaly event forwarding ───────────────────────────────────────────────
+	// Drain detected anomalies and publish them to Redis so the API/dashboard
+	// actually see them — detection alone only logs locally.
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case a := <-anomalyDetector.Anomalies():
+				bus.PublishAnomaly(ctx, events.AnomalyEvent{
+					ServiceName: a.ServiceName,
+					Type:        string(a.Type),
+					Message:     a.Message,
+					Value:       a.Value,
+					Baseline:    a.Baseline,
+					Timestamp:   a.Timestamp,
+				})
+			}
+		}
+	}()
+
 	// ── API command listeners ──────────────────────────────────────────────────
 	// Subscribe to API-initiated circuit reset commands
-	go bus.Subscribe(ctx, "infrawatch:circuit_resets", "$", func(_ string, payload []byte) {
-		sugar.Debugw("circuit reset command received from API")
+	go bus.Subscribe(ctx, streams.CircuitResets, "$", func(_ string, payload []byte) {
+		var cmd enginepkg.CircuitResetCommand
+		if err := json.Unmarshal(payload, &cmd); err != nil {
+			sugar.Warnw("invalid circuit reset command payload", "error", err)
+			return
+		}
+		if !cbRegistry.Reset(cmd.ServiceName) {
+			sugar.Warnw("circuit reset requested for unknown service", "service", cmd.ServiceName)
+			return
+		}
+		sugar.Infow("circuit breaker reset via API command", "service", cmd.ServiceName)
+		bus.PublishCircuitState(ctx, events.CircuitStateEvent{
+			ServiceName: cmd.ServiceName,
+			Snapshot:    cbRegistry.Get(cmd.ServiceName).Snapshot(),
+			Timestamp:   time.Now(),
+		})
 	})
 
 	// Subscribe to API-initiated manual heal commands
-	go bus.Subscribe(ctx, "infrawatch:heal_commands", "$", func(_ string, payload []byte) {
-		sugar.Debugw("manual heal command received from API")
+	go bus.Subscribe(ctx, streams.HealCommands, "$", func(_ string, payload []byte) {
+		var cmd enginepkg.HealCommand
+		if err := json.Unmarshal(payload, &cmd); err != nil {
+			sugar.Warnw("invalid heal command payload", "error", err)
+			return
+		}
+		svc, ok := poller.Lookup(cmd.ServiceName)
+		if !ok {
+			sugar.Warnw("manual heal command for unknown service", "service", cmd.ServiceName)
+			return
+		}
+		sugar.Infow("manual heal command received from API", "service", cmd.ServiceName)
+		go func() {
+			result := healer.Heal(ctx, svc)
+			sugar.Infow("manual healing attempt completed",
+				"service", svc.Name,
+				"action", result.Action,
+				"success", result.Success,
+				"error", result.Error,
+			)
+			bus.PublishHealingEvent(ctx, events.HealingEvent{
+				ServiceName: svc.Name,
+				Action:      result.Action,
+				Success:     result.Success,
+				Error:       result.ErrorString(),
+				Timestamp:   time.Now(),
+			})
+		}()
 	})
 
 	// Subscribe to API-initiated service config mutations.

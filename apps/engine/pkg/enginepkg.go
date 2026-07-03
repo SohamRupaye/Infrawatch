@@ -22,11 +22,15 @@ import (
 // of truth.
 
 const (
-	StreamMetrics     = streams.Metrics
-	StreamStateChange = streams.StateChange
-	StreamHealing     = streams.Healing
-	StreamAnomalies   = streams.Anomalies
-	StreamConfig      = streams.Config
+	StreamMetrics        = streams.Metrics
+	StreamStateChange    = streams.StateChange
+	StreamHealing        = streams.Healing
+	StreamAnomalies      = streams.Anomalies
+	StreamConfig         = streams.Config
+	StreamCircuitState   = streams.CircuitState
+	StreamCircuitResets  = streams.CircuitResets
+	StreamHealCommands   = streams.HealCommands
+	StreamExternalAlerts = streams.ExternalAlerts
 )
 
 // ── Event types ────────────────────────────────────────────────────────────
@@ -77,6 +81,40 @@ type ServiceConfigCommand struct {
 	ServiceName string               `json:"service_name"`
 	Service     config.ServiceConfig `json:"service"`
 	Timestamp   time.Time            `json:"timestamp"`
+}
+
+// CircuitResetCommand is published by the API to request that the engine
+// reset a service's circuit breaker back to CLOSED.
+type CircuitResetCommand struct {
+	ServiceName string    `json:"service_name"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
+// HealCommand is published by the API to request that the engine run a
+// manual healing attempt for a service.
+type HealCommand struct {
+	ServiceName string    `json:"service_name"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
+// ExternalAlertSignal is published by the API when an external alerting
+// system (e.g. Alertmanager) reports a firing/resolved alert mapped to a
+// passive-mode service, so the engine can drive that service's state
+// machine without polling it directly.
+type ExternalAlertSignal struct {
+	ServiceName string    `json:"service_name"`
+	Status      string    `json:"status"` // "firing" or "resolved"
+	Reason      string    `json:"reason"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
+// CircuitStateEvent is published by the engine on every poll with the
+// service's current circuit breaker snapshot, keeping the API's read model
+// in sync with real breaker state (rather than the API guessing at it).
+type CircuitStateEvent struct {
+	ServiceName string          `json:"service_name"`
+	Snapshot    BreakerSnapshot `json:"snapshot"`
+	Timestamp   time.Time       `json:"timestamp"`
 }
 
 // ── Circuit breaker snapshot ───────────────────────────────────────────────
@@ -196,30 +234,39 @@ func (b *Bus) PublishStateChange(ctx context.Context, evt StateChangeEvent) {
 
 // PublishHealCommand queues a manual heal command for the engine to pick up.
 func (b *Bus) PublishHealCommand(ctx context.Context, serviceName string) error {
-	return b.rdb.XAdd(ctx, &redis.XAddArgs{
-		Stream: "infrawatch:heal_commands",
-		MaxLen: 1000,
-		Approx: true,
-		Values: map[string]interface{}{
-			"service_name": serviceName,
-			"action":       "manual_heal",
-			"timestamp":    time.Now().UTC().Format(time.RFC3339),
-		},
-	}).Err()
+	return b.publishCommand(ctx, StreamHealCommands, HealCommand{
+		ServiceName: serviceName,
+		Timestamp:   time.Now(),
+	})
 }
 
 // PublishCircuitReset queues a circuit reset command for the engine.
 func (b *Bus) PublishCircuitReset(ctx context.Context, serviceName string) error {
+	return b.publishCommand(ctx, StreamCircuitResets, CircuitResetCommand{
+		ServiceName: serviceName,
+		Timestamp:   time.Now(),
+	})
+}
+
+// publishCommand serialises cmd to JSON under the "payload" field, matching
+// the wire format every Bus.Subscribe caller (engine included) expects.
+func (b *Bus) publishCommand(ctx context.Context, stream string, cmd interface{}) error {
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		return err
+	}
 	return b.rdb.XAdd(ctx, &redis.XAddArgs{
-		Stream: "infrawatch:circuit_resets",
+		Stream: stream,
 		MaxLen: 1000,
 		Approx: true,
-		Values: map[string]interface{}{
-			"service_name": serviceName,
-			"action":       "circuit_reset",
-			"timestamp":    time.Now().UTC().Format(time.RFC3339),
-		},
+		Values: map[string]interface{}{"payload": string(data)},
 	}).Err()
+}
+
+// PublishExternalAlertSignal queues an external alert signal (e.g. from
+// Alertmanager) for the engine to apply to a passive-mode service.
+func (b *Bus) PublishExternalAlertSignal(ctx context.Context, sig ExternalAlertSignal) error {
+	return b.publishCommand(ctx, StreamExternalAlerts, sig)
 }
 
 // PublishServiceConfigCommand queues a config update command for the engine.

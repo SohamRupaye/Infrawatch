@@ -63,12 +63,35 @@ func validateServices(cfg *Config, ve *ValidationError) {
 			names[svc.Name] = true
 		}
 
-		if svc.URL == "" {
-			ve.add("%s: url is required", prefix)
+		if svc.Mode != "" && svc.Mode != ModeActive && svc.Mode != ModePassive {
+			ve.add("%s: mode must be '%s' or '%s'", prefix, ModeActive, ModePassive)
+		}
+
+		if svc.IsPassive() {
+			// Passive services have no poll URL — they're driven entirely by
+			// external signals (e.g. Alertmanager), so the HTTP-check-specific
+			// requirements below don't apply.
+			if svc.URL != "" {
+				ve.add("%s: url must not be set when mode is '%s'", prefix, ModePassive)
+			}
 		} else {
-			u, err := url.Parse(svc.URL)
-			if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-				ve.add("%s: url must be a valid http/https URL, got '%s'", prefix, svc.URL)
+			if svc.URL == "" {
+				ve.add("%s: url is required", prefix)
+			} else {
+				u, err := url.Parse(svc.URL)
+				if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+					ve.add("%s: url must be a valid http/https URL, got '%s'", prefix, svc.URL)
+				}
+			}
+
+			method := strings.ToUpper(svc.Method)
+			validMethods := map[string]bool{"GET": true, "POST": true, "HEAD": true, "PUT": true, "OPTIONS": true}
+			if !validMethods[method] {
+				ve.add("%s: method '%s' is not supported", prefix, svc.Method)
+			}
+
+			if svc.ExpectStatus < 100 || svc.ExpectStatus > 599 {
+				ve.add("%s: expect_status must be a valid HTTP status code", prefix)
 			}
 		}
 
@@ -77,16 +100,6 @@ func validateServices(cfg *Config, ve *ValidationError) {
 		}
 		if svc.Timeout < 0 {
 			ve.add("%s: timeout must be positive", prefix)
-		}
-
-		method := strings.ToUpper(svc.Method)
-		validMethods := map[string]bool{"GET": true, "POST": true, "HEAD": true, "PUT": true, "OPTIONS": true}
-		if !validMethods[method] {
-			ve.add("%s: method '%s' is not supported", prefix, svc.Method)
-		}
-
-		if svc.ExpectStatus < 100 || svc.ExpectStatus > 599 {
-			ve.add("%s: expect_status must be a valid HTTP status code", prefix)
 		}
 
 		for _, dep := range svc.Dependencies {
@@ -167,9 +180,6 @@ func validateCircuit(cfg *Config, ve *ValidationError) {
 func validateAnomalyConfig(cfg *Config, ve *ValidationError) {
 	if cfg.Anomaly.LatencyMultiplier < 1.0 {
 		ve.add("anomaly.latency_multiplier must be >= 1.0")
-	}
-	if cfg.Anomaly.MemoryGrowthRateMB <= 0 {
-		ve.add("anomaly.memory_growth_rate_mb must be positive")
 	}
 }
 
