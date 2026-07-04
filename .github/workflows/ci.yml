@@ -59,7 +59,7 @@ jobs:
           # from apps/frontend, matching docker/docker-compose.yml's contexts.
           - { name: api, context: ., dockerfile: docker/Dockerfile.api }
           - { name: engine, context: ., dockerfile: docker/Dockerfile.engine }
-          - { name: frontend, context: apps/frontend, dockerfile: ../../docker/Dockerfile.frontend }
+          - { name: frontend, context: apps/frontend, dockerfile: docker/Dockerfile.frontend }
     steps:
       - uses: actions/checkout@v4
 
