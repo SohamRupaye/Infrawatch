@@ -55,7 +55,7 @@ Infrawatch is a decoupled monorepo split into three binaries and two backing sto
 1. **Polling** — The Engine spawns one goroutine per service. Each poller fires an HTTP request on the configured `interval`.
 2. **State machine** — Each service transitions through `UNKNOWN → HEALTHY → DEGRADED → UNHEALTHY → DEAD → RECOVERING`. Transitions are published to the `state_change_events` Redis Stream.
 3. **Circuit breaker** — After `failure_threshold` consecutive failures the circuit opens, skipping health checks until the `timeout` half-open probe succeeds.
-4. **Anomaly detection** — Latency spikes (P95 multiplier) and container memory growth rate are detected independently and emitted as anomaly events.
+4. **Anomaly detection** — Latency spikes (P95 multiplier) are detected independently and emitted as anomaly events.
 5. **Self-healing** — On state degradation the Engine runs the configured `healing_actions` (`docker_restart`, `kubectl_restart`, `fallback`, `webhook`) and logs the result to the `healing_events` stream.
 6. **Alerting** — The alert dispatcher fires configured channels (Slack, PagerDuty, Email, generic Webhook) once per outage onset and once on recovery. Optional `escalate_on_worsening` re-alerts on severity increases.
 7. **API read model** — The API subscribes to all Redis Streams and maintains an in-memory `ServiceView` per service, making REST reads O(1).
@@ -216,9 +216,6 @@ circuit:
 
 anomaly:
   latency_multiplier: 2.0   # P95 × multiplier = anomaly threshold
-  memory_growth_rate_mb: 10 # MB/min growth rate threshold
-  baseline_window: 60m
-  evaluation_window: 5m
 
 alerts:
   escalate_on_worsening: true
@@ -250,6 +247,11 @@ storage:
   max_open_conns: 10
   max_idle_conns: 5
 
+# Drives mode: passive services (below) from Alertmanager alerts instead of
+# Infrawatch's own HTTP polling — see "Alertmanager Integration" below.
+alertmanager:
+  webhook_secret: "..."
+
 services:
   - name: "my-api"
     url: "https://my-api.example.com/health"
@@ -262,7 +264,54 @@ services:
     healing_actions: ["docker_restart", "webhook"]
     container_name: "my-api-container"
     healing_webhook: "https://hooks.example.com/restart"
+
+  - name: "payments-worker"      # no url — driven by Alertmanager instead
+    mode: passive
+    healing_actions: ["kubectl_restart"]
+    namespace: "production"
+    deployment: "payments-worker"
 ```
+
+---
+
+## Alertmanager Integration
+
+Infrawatch's own HTTP poller works well when you don't already run a metrics
+stack, but if you run Prometheus + Alertmanager, Infrawatch is meant to sit
+**on top of** that instead of duplicating it: Alertmanager already knows
+your service is unhealthy, Infrawatch's job is the part Alertmanager doesn't
+do — a circuit breaker to avoid restart storms, self-healing actions, alert
+escalation, and an audit trail of what was tried and whether it worked.
+
+1. Mark a service `mode: passive` and omit its `url` — the engine still runs
+   its normal per-service loop (circuit breaker, healing, alerting), it just
+   never issues an HTTP check itself.
+2. Set `alertmanager.webhook_secret` and configure Alertmanager to POST to
+   `/api/v1/webhooks/alertmanager` with that secret in an `X-Webhook-Secret`
+   header:
+   ```yaml
+   receivers:
+     - name: infrawatch
+       webhook_configs:
+         - url: http://infrawatch-api:8080/api/v1/webhooks/alertmanager
+           http_config:
+             headers:
+               X-Webhook-Secret: "${ALERTMANAGER_WEBHOOK_SECRET}"
+   ```
+3. Add an `infrawatch_service` label to the Prometheus alerts you want
+   mapped to a passive service:
+   ```yaml
+   - alert: PaymentsWorkerDown
+     labels:
+       infrawatch_service: payments-worker
+   ```
+
+A `resolved` alert doesn't force the service straight back to `HEALTHY` — it
+clears the external signal and lets the normal state machine ratchet back up
+over the next few ticks, exactly like a real recovering HTTP check would.
+Alerts for unknown services or services not in `mode: passive` are accepted
+by the endpoint but skipped (visible in the response body), never silently
+dropped.
 
 ---
 
