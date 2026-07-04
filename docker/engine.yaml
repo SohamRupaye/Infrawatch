@@ -1,0 +1,17 @@
+redis:
+  addr: "redis:6379"
+  password: ""
+
+api:
+  addr: ":8080"
+  allow_origins: ["*"]
+
+circuit:
+  failure_threshold: 3
+  success_threshold: 1
+  timeout: 10s
+
+alerts:
+  escalate_on_worsening: true
+
+services: []

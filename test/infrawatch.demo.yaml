@@ -1,0 +1,43 @@
+redis:
+  addr: "redis:6379"
+  password: ""
+
+api:
+  addr: ":8080"
+  allow_origins: ["*"]
+
+circuit:
+  failure_threshold: 3
+  success_threshold: 1
+  timeout: 10s
+
+alerts:
+  escalate_on_worsening: true
+
+services:
+  - name: "auth-service"
+    url: "http://demo-services:4000/health/auth"
+    interval: 5s
+    timeout: 2s
+    method: "GET"
+    expect_status: 200
+    tags: ["core", "security"]
+    healing_actions: ["webhook"]
+    healing_webhook: "http://demo-services:4000/heal/auth"
+
+  - name: "db-service"
+    url: "http://demo-services:4000/health/db"
+    interval: 5s
+    timeout: 2s
+    method: "GET"
+    expect_status: 200
+    tags: ["core", "storage"]
+
+  - name: "api-gateway"
+    url: "http://demo-services:4000/health/api"
+    interval: 5s
+    timeout: 2s
+    method: "GET"
+    expect_status: 200
+    tags: ["edge", "routing"]
+    dependencies: ["auth-service", "db-service"]

@@ -1,0 +1,50 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  engine:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.engine
+      target: dev
+    restart: unless-stopped
+    environment:
+      INFRAWATCH_CONFIG: /app/infrawatch.yaml
+      REDIS_ADDR: redis:6379
+      GIN_MODE: debug
+    volumes:
+      - ..:/app
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    working_dir: /app
+    command: go run ./apps/engine/cmd/...
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+      target: dev
+    restart: unless-stopped
+    environment:
+      INFRAWATCH_CONFIG: /app/infrawatch.yaml
+      REDIS_ADDR: redis:6379
+      GIN_MODE: debug
+    ports:
+      - "8080:8080"
+    volumes:
+      - ..:/app
+    working_dir: /app
+    command: go run ./apps/api/cmd/...
+    depends_on:
+      redis:
+        condition: service_healthy

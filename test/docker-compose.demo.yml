@@ -1,0 +1,17 @@
+services:
+  engine:
+    volumes:
+      - ../test/infrawatch.demo.yaml:/etc/infrawatch/infrawatch.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  api:
+    volumes:
+      - ../test/infrawatch.demo.yaml:/etc/infrawatch/infrawatch.yaml:ro
+
+  demo-services:
+    image: node:20-alpine
+    command: node /app/demo-services.js
+    volumes:
+      - ../test/demo-services.js:/app/demo-services.js:ro
+    ports:
+      - "4000:4000"

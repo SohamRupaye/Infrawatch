@@ -1,0 +1,178 @@
+# =============================================================================
+# Infrawatch example configuration
+# Copy to infrawatch.yaml and fill in the values for your environment.
+# All values in ${ENV_VAR} format are automatically substituted from env.
+# =============================================================================
+
+# ────────────────────────────────────────────────────────────────────────────
+# Services — one entry per endpoint you want to monitor.
+# ────────────────────────────────────────────────────────────────────────────
+services:
+  - name: api-gateway
+    url: http://api-gateway:8080/health
+    interval: 30s          # how often to poll (default: 30s)
+    timeout: 5s            # per-request deadline (default: 5s)
+    method: GET            # GET | POST | HEAD | PUT | OPTIONS (default: GET)
+    expect_status: 200     # HTTP status code that means healthy (default: 200)
+    expect_body: "ok"      # optional — check response body contains this string
+    headers:
+      Authorization: "Bearer ${HEALTH_TOKEN}"
+    tags:
+      - backend
+      - critical
+    dependencies:
+      - postgres            # used to draw edges in the node graph
+
+    # Docker self-healing — restart via the Docker socket
+    container_name: api-gateway
+
+    # Kubernetes self-healing — kubectl rollout restart
+    # namespace: production
+    # deployment: api-gateway
+
+    # Order matters: first action that succeeds wins
+    healing_actions:
+      - docker_restart      # restart the container
+      # - kubectl_restart   # or do a K8s rollout restart
+      # - fallback          # reroute traffic to fallback_url
+      # - webhook           # call healing_webhook
+
+    fallback_url: http://api-gateway-standby:8080
+    healing_webhook: http://internal-ops/hooks/heal
+
+  - name: postgres
+    url: http://postgres-exporter:9187/metrics
+    interval: 60s
+    timeout: 3s
+    container_name: postgres
+    healing_actions:
+      - docker_restart
+
+  - name: redis
+    url: http://redis-exporter:9121/metrics
+    interval: 30s
+    timeout: 3s
+    container_name: redis
+    # No auto-healing for Redis — require human intervention
+    # healing_actions: []
+
+# ────────────────────────────────────────────────────────────────────────────
+# Redis — event bus between engine and API
+# ────────────────────────────────────────────────────────────────────────────
+redis:
+  addr: ${REDIS_ADDR:-localhost:6379}
+  password: ${REDIS_PASSWORD:-}
+  db: 0
+
+# ────────────────────────────────────────────────────────────────────────────
+# API server settings (used by apps/api)
+# ────────────────────────────────────────────────────────────────────────────
+api:
+  addr: :8080
+  read_timeout: 15s
+  write_timeout: 15s
+
+  # JWT — leave blank to disable authentication entirely (dev mode)
+  jwt_secret: ${JWT_SECRET:-}
+
+  # Comma-separated allowed origins for CORS.
+  # Leave empty to allow all origins (dev mode only).
+  allow_origins:
+    - http://localhost:3000
+    - https://your-dashboard.example.com
+
+# ────────────────────────────────────────────────────────────────────────────
+# Storage — TimescaleDB for metrics and incident history
+# ────────────────────────────────────────────────────────────────────────────
+storage:
+  dsn: ${DATABASE_URL:-postgres://infrawatch:infrawatch@localhost:5432/infrawatch}
+  max_open_conns: 10
+  max_idle_conns: 5
+
+# ────────────────────────────────────────────────────────────────────────────
+# Circuit breaker — global defaults applied to every service
+# ────────────────────────────────────────────────────────────────────────────
+circuit:
+  # Open the breaker after this many consecutive failures
+  failure_threshold: 3
+  # Close the breaker again after this many consecutive successes in half-open
+  success_threshold: 1
+  # How long to wait in OPEN state before sending one probe (half-open)
+  timeout: 30s
+
+# ────────────────────────────────────────────────────────────────────────────
+# Anomaly detection
+# ────────────────────────────────────────────────────────────────────────────
+anomaly:
+  # Alert when P95 latency exceeds (latency_multiplier × hourly baseline)
+  latency_multiplier: 2.0
+
+  # Alert when container memory grows faster than this (MB/min sustained)
+  memory_growth_rate_mb: 10.0
+
+  # How much historical data to use when computing a baseline
+  baseline_window: 60m
+
+  # Window over which memory growth rate is evaluated
+  evaluation_window: 5m
+
+# ────────────────────────────────────────────────────────────────────────────
+# Alerting — enable the channels you want and map states to channels
+# ────────────────────────────────────────────────────────────────────────────
+alerts:
+  slack:
+    enabled: false
+    webhook_url: ${SLACK_WEBHOOK_URL:-}
+    channel: "#alerts"         # optional override
+
+  pagerduty:
+    enabled: false
+    integration_key: ${PAGERDUTY_INTEGRATION_KEY:-}
+
+  email:
+    enabled: false
+    smtp_host: smtp.example.com
+    smtp_port: 587             # 465 for TLS, 587 for STARTTLS
+    username: ${SMTP_USER:-}
+    password: ${SMTP_PASS:-}
+    from: infrawatch@example.com
+    recipients:
+      - ops@example.com
+      - oncall@example.com
+
+  webhook:
+    enabled: false
+    url: https://ops.example.com/hooks/infrawatch
+    headers:
+      X-Secret: ${WEBHOOK_SECRET:-}
+
+  # Which channels fire for each service state
+  state_rules:
+    DEGRADED:
+      - slack
+    UNHEALTHY:
+      - slack
+    DEAD:
+      - slack
+      - pagerduty
+      - email
+    RECOVERING:
+      - slack
+    HEALTHY: []            # silent recovery — change to [slack] if you want noise
+
+# ────────────────────────────────────────────────────────────────────────────
+# Self-healing
+# ────────────────────────────────────────────────────────────────────────────
+healing:
+  enabled: true
+  max_restart_attempts: 3   # per sliding window (see restart_cooldown)
+  restart_cooldown: 60s     # window over which max_restart_attempts is enforced
+  kubeconfig_path: ""       # leave blank to use in-cluster config or $KUBECONFIG
+
+# ────────────────────────────────────────────────────────────────────────────
+# Docker options (engine auto-discovery and healing socket)
+# ────────────────────────────────────────────────────────────────────────────
+docker:
+  socket_path: /var/run/docker.sock
+  auto_discover: false
+  network_filter: ""        # filter by Docker network name; empty = all networks
