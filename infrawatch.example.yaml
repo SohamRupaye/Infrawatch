@@ -56,6 +56,20 @@ services:
     # No auto-healing for Redis — require human intervention
     # healing_actions: []
 
+  # Passive service — no url to poll. Its state is driven entirely by
+  # external alert signals (see the `alertmanager` section below) instead
+  # of the engine's own HTTP checks. Useful when you already run Prometheus
+  # + Alertmanager and want Infrawatch's circuit breaker / healing / alert
+  # escalation on top of alerts you're already generating, without a second
+  # health-check path.
+  - name: payments-worker
+    mode: passive
+    tags: [backend]
+    healing_actions:
+      - kubectl_restart
+    namespace: production
+    deployment: payments-worker
+
 # ────────────────────────────────────────────────────────────────────────────
 # Redis — event bus between engine and API
 # ────────────────────────────────────────────────────────────────────────────
@@ -106,15 +120,6 @@ circuit:
 anomaly:
   # Alert when P95 latency exceeds (latency_multiplier × hourly baseline)
   latency_multiplier: 2.0
-
-  # Alert when container memory grows faster than this (MB/min sustained)
-  memory_growth_rate_mb: 10.0
-
-  # How much historical data to use when computing a baseline
-  baseline_window: 60m
-
-  # Window over which memory growth rate is evaluated
-  evaluation_window: 5m
 
 # ────────────────────────────────────────────────────────────────────────────
 # Alerting — enable the channels you want and map states to channels
@@ -176,3 +181,28 @@ docker:
   socket_path: /var/run/docker.sock
   auto_discover: false
   network_filter: ""        # filter by Docker network name; empty = all networks
+
+# ────────────────────────────────────────────────────────────────────────────
+# Alertmanager webhook receiver — drives passive-mode services (mode: passive
+# above) from your existing Prometheus + Alertmanager alerts instead of
+# Infrawatch polling them directly. Leave webhook_secret blank to disable
+# the receiver (POST /api/v1/webhooks/alertmanager returns 503).
+#
+# Alertmanager receiver config pointing here:
+#
+#   receivers:
+#     - name: infrawatch
+#       webhook_configs:
+#         - url: http://infrawatch-api:8080/api/v1/webhooks/alertmanager
+#           http_config:
+#             headers:
+#               X-Webhook-Secret: ${ALERTMANAGER_WEBHOOK_SECRET}
+#
+# Map each Prometheus alert to a service with a label:
+#
+#   - alert: PaymentsWorkerDown
+#     labels:
+#       infrawatch_service: payments-worker
+# ────────────────────────────────────────────────────────────────────────────
+alertmanager:
+  webhook_secret: ${ALERTMANAGER_WEBHOOK_SECRET:-}
