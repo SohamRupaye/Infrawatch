@@ -32,15 +32,16 @@ Config keys: `circuit.failure_threshold`, `circuit.success_threshold`, `circuit.
 
 ## Engine — Anomaly Detection
 
-**What:** Detects latency spikes and container memory growth independently from health state, emitting anomaly events on a channel.
+**What:** Detects latency spikes independently from health state, emitting anomaly events on a channel that the engine drains and publishes to Redis for the API/dashboard to consume.
 
 | File | Role |
 |---|---|
-| `apps/engine/internal/anomaly/detector.go` | Facade wrapping both sub-detectors. Exposes `RecordLatency`, `RecordMemory`, and the `Anomalies()` channel. |
+| `apps/engine/internal/anomaly/detector.go` | Facade wrapping the latency sub-detector. Exposes `RecordLatency` and the `Anomalies()` channel. |
 | `apps/engine/internal/anomaly/latency.go` | Maintains a per-service hourly P95 baseline. Fires an anomaly when the latest response time exceeds `baseline × latency_multiplier`. |
-| `apps/engine/internal/anomaly/memory.go` | Tracks container memory samples (bytes). Fires an anomaly when growth rate exceeds `memory_growth_rate_mb` MB/min. |
 
-Config keys: `anomaly.latency_multiplier`, `anomaly.memory_growth_rate_mb`, `anomaly.baseline_window`, `anomaly.evaluation_window`
+Config keys: `anomaly.latency_multiplier`
+
+Container memory-growth anomaly detection was removed — it was fully implemented but never wired to any code path that actually samples container memory, so it did nothing at runtime. Real container resource metrics are better served by existing tools (cAdvisor, Prometheus node/container exporters) than reimplemented here; see the Alertmanager ingestion path for how Infrawatch is meant to consume signals from those tools instead.
 
 ---
 
@@ -121,6 +122,25 @@ Streams:
 |---|---|
 | `apps/engine/cmd/main.go` | Subscribes to `service_config_commands` and calls `poller.Apply()`. |
 | `apps/engine/internal/health/poller.go` | `Apply(services []ServiceConfig)` diffs the new config against the running set and starts/stops goroutines accordingly. |
+
+---
+
+## Alertmanager Ingestion (passive-mode services)
+
+**What:** An alternative trigger source alongside the HTTP poller — services with `mode: passive` have no poll URL and are instead driven by Alertmanager webhook alerts, reusing the exact same circuit breaker / healing / alerting pipeline as polled services.
+
+| File | Role |
+|---|---|
+| `apps/api/handlers/alertmanager_webhook.go` | `POST /api/v1/webhooks/alertmanager`. Authenticates via `X-Webhook-Secret`, maps each alert's `infrawatch_service` label to a passive-mode service, publishes an `ExternalAlertSignal`. |
+| `apps/engine/internal/health/alertsignal.go` | `AlertSignalHandler` applies a signal: sets/clears the service's alert floor, then triggers an immediate re-poll. |
+| `apps/engine/internal/health/state.go` | `ServiceState.SetFloor`/`ClearFloor`/`Floor()` — an externally-asserted "down" signal, separate from the FSM's own transition logic. |
+| `apps/engine/internal/health/poller.go` | For passive services, `poll()` builds a synthetic `CheckResult` from the alert floor instead of issuing an HTTP check, then feeds it through the same breaker/anomaly/`StateManager.Record` path as any polled service. |
+
+Config keys: `alertmanager.webhook_secret`, per-service `mode: passive`
+
+Stream: `infrawatch:external_alert_signals` (API → Engine)
+
+A `resolved` alert clears the floor but does not force `HEALTHY` directly — the next poll tick re-evaluates normally, so the FSM's recovery ratchet (`DEGRADED → RECOVERING → HEALTHY`) still applies exactly as it would for a real recovering HTTP check.
 
 ---
 

@@ -30,9 +30,6 @@ circuit:
 
 anomaly:
   latency_multiplier:    2.5   # flag if p95 > 2.5× baseline
-  memory_growth_rate_mb: 50
-  baseline_window:       5m
-  evaluation_window:     1m
 
 alerts:
   escalate_on_worsening: true
