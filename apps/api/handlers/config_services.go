@@ -27,6 +27,7 @@ func NewConfigServiceHandler(deps Deps) *ConfigServiceHandler {
 
 type serviceUpsertRequest struct {
 	Name           string            `json:"name"`
+	Mode           string            `json:"mode"` // "active" (default) or "passive"
 	URL            string            `json:"url"`
 	Interval       string            `json:"interval"`
 	Timeout        string            `json:"timeout"`
@@ -252,8 +253,21 @@ func requestToService(req serviceUpsertRequest) (engineconfig.ServiceConfig, err
 	if strings.TrimSpace(req.Name) == "" {
 		return engineconfig.ServiceConfig{}, fmt.Errorf("name is required")
 	}
-	if strings.TrimSpace(req.URL) == "" {
+
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	if mode == "" {
+		mode = engineconfig.ModeActive
+	}
+	if mode != engineconfig.ModeActive && mode != engineconfig.ModePassive {
+		return engineconfig.ServiceConfig{}, fmt.Errorf("mode must be '%s' or '%s'", engineconfig.ModeActive, engineconfig.ModePassive)
+	}
+	isPassive := mode == engineconfig.ModePassive
+
+	if !isPassive && strings.TrimSpace(req.URL) == "" {
 		return engineconfig.ServiceConfig{}, fmt.Errorf("url is required")
+	}
+	if isPassive && strings.TrimSpace(req.URL) != "" {
+		return engineconfig.ServiceConfig{}, fmt.Errorf("url must not be set when mode is '%s'", engineconfig.ModePassive)
 	}
 
 	interval := 30 * time.Second
@@ -284,6 +298,7 @@ func requestToService(req serviceUpsertRequest) (engineconfig.ServiceConfig, err
 
 	return engineconfig.ServiceConfig{
 		Name:           req.Name,
+		Mode:           mode,
 		URL:            req.URL,
 		Interval:       interval,
 		Timeout:        timeout,
@@ -377,21 +392,25 @@ func applyValidationDefaults(cfg *engineconfig.Config) {
 	if cfg.Anomaly.LatencyMultiplier == 0 {
 		cfg.Anomaly.LatencyMultiplier = 2.0
 	}
-	if cfg.Anomaly.MemoryGrowthRateMB == 0 {
-		cfg.Anomaly.MemoryGrowthRateMB = 10.0
-	}
 	for i := range cfg.Services {
-		if cfg.Services[i].Interval == 0 {
-			cfg.Services[i].Interval = 30 * time.Second
+		svc := &cfg.Services[i]
+		if svc.Mode == "" {
+			svc.Mode = engineconfig.ModeActive
 		}
-		if cfg.Services[i].Timeout == 0 {
-			cfg.Services[i].Timeout = 5 * time.Second
+		if svc.Interval == 0 {
+			svc.Interval = 30 * time.Second
 		}
-		if cfg.Services[i].Method == "" {
-			cfg.Services[i].Method = "GET"
+		if svc.Timeout == 0 {
+			svc.Timeout = 5 * time.Second
 		}
-		if cfg.Services[i].ExpectStatus == 0 {
-			cfg.Services[i].ExpectStatus = 200
+		if svc.Mode == engineconfig.ModePassive {
+			continue
+		}
+		if svc.Method == "" {
+			svc.Method = "GET"
+		}
+		if svc.ExpectStatus == 0 {
+			svc.ExpectStatus = 200
 		}
 	}
 }
